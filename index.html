@@ -413,7 +413,7 @@ function buildLevels(){
         {x:2350,y:368,type:'shroom', range:[2280,2400], speed:2.0},
         {x:2980,y:368,type:'slime', range:[2940,3080], speed:1.4},
         {x:3120,y:368,type:'shroom', range:[3000,3300], speed:1.9},
-        {x:3260,y:368,type:'boss', range:[3150,3360], speed:1.5, hp:3},
+        {x:3260,y:368,type:'boss', range:[3150,3360], speed:1.5, hp:5},
       ],
       coins: [
         {x:220,y:264},{x:250,y:264},
@@ -523,7 +523,7 @@ function buildLevels(){
         {x:1940,y:368, type:'shroom', range:[1910,2220], speed:1.6},
         {x:2450,y:368, type:'slime', range:[2420,2500], speed:1.2},
         {x:2900,y:368, type:'shroom', range:[2680,2900], speed:1.4},
-        {x:2960,y:340, type:'boss', range:[2900,3060], speed:1.1, hp:4, name:'中ボス なぱっちゃん'},
+        {x:2960,y:340, type:'boss', range:[2900,3060], speed:1.1, hp:8, name:'中ボス なぱっちゃん'},
       ],
       coins: [
         {x:220,y:264},
@@ -791,7 +791,7 @@ function buildLevels(){
         {x:1980,y:368, type:'slime', range:[1950,2200], speed:1.4},
         {x:2380,y:368, type:'shroom', range:[2200,2440], speed:1.8},
         {x:2900,y:368, type:'slime', range:[2860,2980], speed:1.3},
-        {x:3200,y:340, type:'boss', range:[3080,3300], speed:1.3, hp:8, final:true, name:'ラスボス キノコ大魔王'},
+        {x:3200,y:340, type:'boss', range:[3080,3300], speed:1.3, hp:15, final:true, name:'ラスボス キノコ大魔王'},
       ],
       coins: [
         {x:240,y:264},
@@ -829,7 +829,7 @@ const player = {
   hurtTimer:0, winTimer:0, squash:0, animT:0,
   invincibleTimer:0, shield:false,
   big:false, skillCooldown:0, faceRegrowTimer:0, faceRegrowMax:18,
-  standingPlatform: null,
+  standingPlatform: null, ridePlatform: null, goalBlockedFlash: 0,
   chargingSkill:false, chargeTime:0,
   ultMeter:0, ultFlashTimer:0, ultSwarmSpawned:false,
 };
@@ -859,6 +859,7 @@ function loadLevel(idx){
   player.invincibleTimer = 0; player.shield = false;
   player.big = false; player.w = 34; player.h = 34;
   player.skillCooldown = 0; player.faceRegrowTimer = 0;
+  player.standingPlatform = null; player.ridePlatform = null; player.goalBlockedFlash = 0;
   player.chargingSkill = false; player.chargeTime = 0;
   player.ultMeter = 0; player.ultFlashTimer = 0; player.ultSwarmSpawned = false;
   faceProjectiles = []; swarmFaces = []; energyMotes = []; ultTargets = []; screenShake = 0;
@@ -920,6 +921,12 @@ function updateHUD(){
 
 // ---------- Input ----------
 window.addEventListener('keydown', (e)=>{
+  if(e.key === ' ' && gameState !== 'playing'){
+    e.preventDefault();
+    const btnId = { title:'start-btn', cleared:'next-btn', dead:'retry-btn', won:'restart-btn' }[gameState];
+    if(btnId) document.getElementById(btnId).click();
+    return;
+  }
   if(['ArrowLeft','a','A'].includes(e.key)) keys.left = true;
   if(['ArrowRight','d','D'].includes(e.key)) keys.right = true;
   if(['ArrowUp',' ','w','W'].includes(e.key)){ if(!keys.jump) jumpPressedEdge = true; keys.jump = true; e.preventDefault(); }
@@ -1217,7 +1224,7 @@ function update(){
     player.x += player.vx; player.y += player.vy;
     if(player.hurtTimer === 0){
       if(lives <= 0){ gameState='dead'; showOverlay('over-overlay'); }
-      else { player.x = level.playerStart.x; player.y = level.playerStart.y; player.vx=0; player.vy=0; }
+      else { player.x = level.playerStart.x; player.y = level.playerStart.y; player.vx=0; player.vy=0; player.ridePlatform=null; }
     }
     updateCamera();
     return;
@@ -1238,6 +1245,17 @@ function update(){
 
   // horizontal movement
   updatePlatforms();
+
+  // ride the moving platform we were standing on last frame — apply its motion to the
+  // player BEFORE gravity/collision this frame, so a fast-moving platform (especially one
+  // dropping down) can't outrun the player's own fall and cause flickery ground contact.
+  if(player.ridePlatform && level.platforms.includes(player.ridePlatform)){
+    player.x += player.ridePlatform.deltaX || 0;
+    player.y += player.ridePlatform.deltaY || 0;
+  } else {
+    player.ridePlatform = null;
+  }
+
   const boosted = player.invincibleTimer > 0;
   const curMaxSpeed = boosted ? MAX_SPEED * 1.4 : MAX_SPEED;
   const friction = player.onGround ? GROUND_FRICTION : AIR_FRICTION;
@@ -1253,6 +1271,7 @@ function update(){
     player.vy = JUMP_VELOCITY;
     player.onGround = false;
     player.squash = 6;
+    player.ridePlatform = null;
   }
 
   player.vy += GRAVITY;
@@ -1264,9 +1283,11 @@ function update(){
 
   stepPhysics();
 
-  // ride moving platforms horizontally (vertical carry happens naturally via collision)
-  if(player.onGround && player.standingPlatform && player.standingPlatform.type === 'moving' && player.standingPlatform.axis !== 'y'){
-    player.x += player.standingPlatform.deltaX || 0;
+  // commit to (or drop) the platform we're actually resting on this frame
+  if(player.onGround && player.standingPlatform && player.standingPlatform.type === 'moving'){
+    player.ridePlatform = player.standingPlatform;
+  } else {
+    player.ridePlatform = null;
   }
   updateCrumblePlatforms();
   checkSpikes();
@@ -1385,7 +1406,13 @@ function update(){
       const playerBottom = player.y + player.h;
       const stompMargin = 14;
       if(player.invincibleTimer > 0){
-        defeatEnemy(e);
+        if(e.type === 'boss'){
+          e.hp = (e.hp||1) - 3;
+          spawnParticles(box.x+box.w/2, box.y+box.h/2, '#FFE9A8', 12);
+          if(e.hp <= 0) defeatEnemy(e);
+        } else {
+          defeatEnemy(e);
+        }
       } else if(player.vy > 1 && playerBottom - box.y < stompMargin){
         // stomp
         e.hp = (e.hp||1) - 1;
@@ -1453,9 +1480,18 @@ function update(){
   const gbox = {x:level.goal.x, y:level.goal.y, w:44, h:150};
   const pbox2 = {x:player.x, y:player.y, w:player.w, h:player.h};
   if(rectsOverlap(pbox2, gbox) && player.winTimer===0 && player.hurtTimer===0){
-    player.winTimer = 40;
-    player.vy = -6;
+    const bossAlive = level.enemies.some(e=>e.type==='boss' && !e.dead);
+    if(bossAlive){
+      if(player.goalBlockedFlash === undefined || player.goalBlockedFlash <= 0){
+        player.goalBlockedFlash = 70;
+        spawnParticles(level.goal.x+22, level.goal.y+60, '#E0483C', 10);
+      }
+    } else {
+      player.winTimer = 40;
+      player.vy = -6;
+    }
   }
+  if(player.goalBlockedFlash > 0) player.goalBlockedFlash--;
 
   // particles
   particles.forEach(p=>{ p.x += p.vx; p.y += p.vy; p.vy += 0.25; p.life--; });
@@ -1814,23 +1850,46 @@ function drawGoal(){
   const sx = level.goal.x - camX;
   if(sx < -100 || sx > W+100) return;
   const gy = level.goal.y;
+  const bossAlive = level.enemies.some(e=>e.type==='boss' && !e.dead);
   ctx.save();
   ctx.translate(sx+22, gy+70);
   // swirling chaos portal
   for(let ring=3; ring>=1; ring--){
-    const hue = (frame*3 + ring*70) % 360;
-    ctx.strokeStyle = `hsl(${hue},80%,60%)`;
+    const hue = bossAlive ? 0 : (frame*3 + ring*70) % 360;
+    ctx.strokeStyle = bossAlive ? 'rgba(140,40,40,0.7)' : `hsl(${hue},80%,60%)`;
     ctx.lineWidth = 5 - ring;
     ctx.beginPath();
     ctx.ellipse(0, 0, 20*ring/3 + 6, 68*ring/3 + 10, 0, frame*0.03*ring, frame*0.03*ring + Math.PI*1.6);
     ctx.stroke();
   }
-  ctx.fillStyle = 'rgba(20,10,30,0.55)';
+  ctx.fillStyle = bossAlive ? 'rgba(20,10,14,0.7)' : 'rgba(20,10,30,0.55)';
   ctx.beginPath(); ctx.ellipse(0,0,24,74,0,0,Math.PI*2); ctx.fill();
-  const hue2 = (frame*5) % 360;
-  ctx.fillStyle = `hsl(${hue2},90%,70%)`;
-  ctx.beginPath(); ctx.ellipse(0,0,10,32,0,0,Math.PI*2); ctx.fill();
+  if(bossAlive){
+    ctx.fillStyle = 'rgba(90,90,90,0.8)';
+    ctx.beginPath(); ctx.arc(0,-10,9,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle = 'rgba(70,70,70,0.9)'; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.arc(0,-20,8,Math.PI,0); ctx.stroke();
+  } else {
+    const hue2 = (frame*5) % 360;
+    ctx.fillStyle = `hsl(${hue2},90%,70%)`;
+    ctx.beginPath(); ctx.ellipse(0,0,10,32,0,0,Math.PI*2); ctx.fill();
+  }
   ctx.restore();
+
+  if(player.goalBlockedFlash > 0){
+    const a = Math.min(1, player.goalBlockedFlash/20);
+    ctx.save();
+    ctx.globalAlpha = a;
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#FFF6E6';
+    ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+    ctx.lineWidth = 3;
+    ctx.font = 'bold 18px sans-serif';
+    const ty = gy + 40 - (70-player.goalBlockedFlash)*0.6;
+    ctx.strokeText('ボスをたおせ！', sx+22, ty);
+    ctx.fillText('ボスをたおせ！', sx+22, ty);
+    ctx.restore();
+  }
 }
 function roundRectLocal(x,y,w,h,r){
   ctx.moveTo(x+r,y);
